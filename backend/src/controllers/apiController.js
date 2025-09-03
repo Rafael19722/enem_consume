@@ -1,69 +1,101 @@
-const { fetchQuestionByYear } = require("../services/apiService");
+const { fetchQuestionByYear, getDataExams, getDisciplinesData } = require("../services/apiService");
 const fs = require("fs");
-const { Document, Packer, Paragraph, TextRun } = require("docx");
+const PDFDocument = require('pdfkit');
 const path = require("path");
 
-async function getQuestions(req, res) {
+async function getQuestionsNoModel(req, res) {
     try {
-        const file = req.file;
-
-        if (!file) return res.status(400).json({ error: "Nenhum arquivo enviado"});
-
-        const data = req.body.data ? JSON.parse(req.body.data) : {};
-
-        const year = data.year;
-        const limit = data.limit;
+        const {year, limit} = req.body;
+        console.log(year)
         const response = await fetchQuestionByYear(year, limit);
-
-        console.log("olá");
-
         const questions = response.questions;
-
-        const text = fs.readFileSync(file.path, "utf-8");
-
-        let processedText = text;
-        const matches = processedText.match(/:(?=\s)/g) || [];
         
-        if (matches.length !== questions.length) {
-            console.warn(`Aviso: ${matches.length} marcadores encontrados, mas ${questions.length} questões disponíveis`);
-        }
-
-        // Substitui cada : pelo contexto da questão correspondente
-        for (let i = 0; i < Math.min(matches.length, questions.length); i++) {
-            processedText = processedText.replace(/:(?=\s)/, questions[i].context);
-        }
-
-        // Cria o documento
-        const doc = new Document({
-            creator: "Enem",
-            title: "Questões ENEM",
-            description: `Questões do ENEM ${year}`,
-            sections: []
-        });
-
-        doc.addSection({
-            properties: {},
-            children: [
-                new Paragraph({
-                    text: "Questões Processadas",
-                    heading: "Title"
-                }),
-                new Paragraph({
-                    text: processedText
-                })
-            ],
-        });
-
-        const buffer = await Packer.toBuffer(doc);
+        const doc = new PDFDocument();
         
-        fs.unlinkSync(file.path);
+        // Configurar headers para download
+        res.setHeader('Content-Disposition', 'attachment; filename="questoes-enem.pdf"');
+        res.setHeader('Content-Type', 'application/pdf');
+        
+        // Pipe do PDF para a response
+        doc.pipe(res);
 
-        res.set({
-            "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "Content-Disposition": "attachment; filename=processado.docx",
+        // Adicionar conteúdo ao PDF
+        questions.forEach(question => {
+            doc.fontSize(16).text(question.title, { underline: true });
+            doc.moveDown(0.5);
+            
+            doc.fontSize(12).text(question.context);
+            doc.moveDown(0.5);
+            
+            doc.fontSize(12).text(question.alternativesIntroduction);
+            doc.moveDown(0.5);
+            
+            question.alternatives.forEach(alt => {
+                doc.text(`${alt.letter}) ${alt.text}`);
+            });
+            
+            doc.moveDown(1);
         });
+        
+        // Finalizar o PDF
+        doc.end();
 
-        res.send(buffer);
+        // Adicionar um listener para o evento 'finish' no stream de resposta
+        // Isso garante que a resposta só seja encerrada após todos os dados do PDF serem enviados
+        res.on('finish', () => {
+            console.log('PDF enviado com sucesso para o cliente.');
+        });
+    } catch (error) {
+        console.error('Erro detalhado:', error);
+        res.status(500).json({ 
+            error: 'Erro interno',
+            message: error.message 
+    });
+    }
+
+    
+}
+
+async function getYears(req, res) {
+    try {
+
+        const years = [];
+
+        const response = await getDataExams();
+
+        response.forEach((exam, index) => {
+            years.push(exam.year);
+        })
+
+        res.json(years);
+
+    } catch (error) {
+        console.error('Erro detalhado:', error);
+        res.status(500).json({ 
+            error: 'Erro interno',
+            message: error.message 
+        });
+    }
+}
+
+async function getSubjects(req, res) {
+    try {
+        const { year } = req.query;
+
+        const disciplines = [];
+        const disciplinesValues = [];
+
+        const response = await getDisciplinesData(year);
+
+        response.disciplines.forEach((subject, index) => {
+            disciplinesValues.push(subject.value);
+            disciplines.push(subject.label);
+        })
+        response.languages.forEach((language, index) => {
+            disciplines.push(language.label);
+        })
+        
+        res.json([disciplines, disciplinesValues]);
 
     } catch (error) {
         console.error('Erro detalhado:', error);
@@ -74,4 +106,4 @@ async function getQuestions(req, res) {
     }
 }
 
-module.exports = { getQuestions };
+module.exports = { getQuestionsNoModel, getYears, getSubjects };

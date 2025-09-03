@@ -7,4 +7,16 @@ async function fetchQuestionByYear(year, limit) {
     return response.data;
 }
 
-module.exports = { fetchQuestionByYear };
+async function getDataExams() {
+    const response = await axios.get('https://api.enem.dev/v1/exams');
+
+    return response.data;
+}
+
+async function getDisciplinesData(year) {
+    const response = await axios.get(`https://api.enem.dev/v1/exams/${year}`)
+
+    return response.data;
+}
+
+module.exports = { fetchQuestionByYear, getDataExams, getDisciplinesData };

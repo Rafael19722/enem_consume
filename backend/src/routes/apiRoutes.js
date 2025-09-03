@@ -1,10 +1,11 @@
 const express = require("express");
-const multer = require("multer");
 const router = express.Router();
-const { getQuestions } = require("../controllers/apiController");
+const { getQuestionsNoModel, getYears, getSubjects } = require("../controllers/apiController");
 
-const upload = multer({ dest: "uploads/" });
 
-router.post("/questions", upload.single("file"), getQuestions);
+router.post("/questions-nomodel", getQuestionsNoModel);
+router.get("/getYears", getYears);
+router.get("/getSubjects", getSubjects);
+
 
 module.exports = router;
