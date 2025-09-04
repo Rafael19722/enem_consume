@@ -1,14 +1,14 @@
-const { fetchQuestionByYear, getDataExams, getDisciplinesData } = require("../services/apiService");
+const { fetchQuestionByYear, getDataExams, getDisciplinesData, getQuestionsByOffset } = require("../services/apiService");
 const fs = require("fs");
 const PDFDocument = require('pdfkit');
 const path = require("path");
 
 async function getQuestionsNoModel(req, res) {
     try {
-        const {year, limit} = req.body;
+        const {discipline, year, limit} = req.body;
         console.log(year)
-        const response = await fetchQuestionByYear(year, limit);
-        const questions = response.questions;
+        const response = await getQuestionsByDiscipline(discipline, year, limit);
+        const questions = response;
         
         const doc = new PDFDocument();
         
@@ -106,4 +106,109 @@ async function getSubjects(req, res) {
     }
 }
 
-module.exports = { getQuestionsNoModel, getYears, getSubjects };
+async function getQuestionsByDiscipline(discipline, year, limit) {
+    try {
+
+        let offset = "";
+        let limitQuestions = 44;
+
+        if (discipline == "linguagens") {
+            offset = 6;
+            limitQuestions = 39;
+        } else if (discipline == "ciencias-humanas") {
+            offset = 46;
+        } else if (discipline == "ciencias-natureza") {
+            offset = 91;
+        } else if (discipline == "matematica") {
+            offset = 136;
+        } else {
+            offset = 1
+            limitQuestions = 10
+        }
+    
+        const response = await getQuestionsByOffset(year, offset, limitQuestions);
+        const bruteQuestions = response.questions;
+
+        let randomNumbers = [];
+        let randomNumber = 0;
+        let questions = [];
+
+        if (offset != 1 && limit <= 44) {
+            for (let i = 0; i < limit; i++) {
+                randomNumber = randomInt(offset, limitQuestions + offset);
+                if (!randomNumbers.includes(randomNumber)) {
+                    randomNumbers.push(randomNumber);
+                } else {
+                    i --;
+                }
+            }
+        } else {
+            if (limit < 5) {
+                for (let i = 0; i < limit; i++) {
+                    randomNumber = randomInt(offset, 5);
+                    if (!randomNumbers.includes(randomNumber)) {
+                        randomNumbers.push(randomNumber);
+                    } else {
+                        i --;
+                    }
+                }
+            } else if (limit == 5) {
+                for (let i = 0; i < 5; i++) {
+                    randomNumbers.push(i);
+                }
+            } else {
+                return res.status(500).json({ 
+                    error: 'A quantidade de questões é superior a que existem no banco' 
+                });
+            }
+        }
+
+        let choosenNumbers = [];
+
+        do {
+
+            bruteQuestions.forEach((question, index) => {
+                if (randomNumbers.includes(question.index)) {
+                    if (!questions.includes(question)) {
+                        questions.push(question);
+                        choosenNumbers.push(question.index);
+                    }
+                } 
+            });
+
+            if (choosenNumbers.length < randomNumbers.length) {
+                lengthRandom = randomNumbers.length;
+                randomNumbers.forEach((number, index) => {
+                    if (!choosenNumbers.includes(number)) {
+                        randomNumbers.splice(index, 1);
+                        while (randomNumbers.length < lengthRandom) {
+                            randomNumber = randomInt(offset, limitQuestions + offset);
+                            if (!randomNumbers.includes(randomNumber)) {
+                                randomNumbers.push(randomNumber);
+                                break;
+                            }
+                        }
+                    }
+                })
+            }
+            
+        } while (questions.length < limit);
+
+        return questions;
+
+
+    } catch (error) {
+        console.error('Erro detalhado:', error);
+        res.status(500).json({ 
+            error: 'Erro interno',
+            message: error.message 
+        });
+    }
+
+}
+
+function randomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+module.exports = { getQuestionsNoModel, getYears, getSubjects, getQuestionsByDiscipline };

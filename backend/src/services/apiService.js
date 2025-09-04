@@ -19,4 +19,10 @@ async function getDisciplinesData(year) {
     return response.data;
 }
 
-module.exports = { fetchQuestionByYear, getDataExams, getDisciplinesData };
+async function getQuestionsByOffset(year, offset, limitQuestions) {
+    const response = await axios.get(`https://api.enem.dev/v1/exams/${year}/questions?offset=${offset}&limit=${limitQuestions}`)
+
+    return response.data;
+}
+
+module.exports = { fetchQuestionByYear, getDataExams, getDisciplinesData,  getQuestionsByOffset};
