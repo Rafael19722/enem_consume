@@ -1,13 +1,15 @@
-const { fetchQuestionByYear, getDataExams, getDisciplinesData, getQuestionsByOffset } = require("../services/apiService");
+const { fetchQuestionByYear, getDataExams, getDisciplinesData, getQuestionsByOffset, getQuestionsByLanguage } = require("../services/apiService");
 const fs = require("fs");
 const PDFDocument = require('pdfkit');
 const path = require("path");
 
 async function getQuestionsNoModel(req, res) {
+    
     try {
         const {discipline, year, limit} = req.body;
-        console.log(year)
+
         const response = await getQuestionsByDiscipline(discipline, year, limit);
+
         const questions = response;
         
         const doc = new PDFDocument();
@@ -50,11 +52,10 @@ async function getQuestionsNoModel(req, res) {
         res.status(500).json({ 
             error: 'Erro interno',
             message: error.message 
-    });
+        });
     }
-
-    
 }
+
 
 async function getYears(req, res) {
     try {
@@ -106,9 +107,111 @@ async function getSubjects(req, res) {
     }
 }
 
-async function getQuestionsByDiscipline(discipline, year, limit) {
+async function getQuestionsByDiscipline(bruteQuestions, limit) {
     try {
 
+        if (bruteQuestions.length < limit) {
+
+            return res.status(500).json({type: "o número de questões pedidas é maior do que o registrado"});
+        
+        } else {
+
+            let randomNumbers = [];
+            let randomNumber = 0;
+            let questions = [];
+            let err = {};
+    
+            if (offset != 1 && limit <= 44) {
+                for (let i = 0; i < limit; i++) {
+                    randomNumber = randomInt(offset, limitQuestions + offset);
+                    if (!randomNumbers.includes(randomNumber)) {
+                        randomNumbers.push(randomNumber);
+                    } else {
+                        i --;
+                    }
+                }
+            } else {
+                if (limit < 5) {
+                    for (let i = 0; i < limit; i++) {
+                        randomNumber = randomInt(offset, 5);
+                        if (!randomNumbers.includes(randomNumber)) {
+                            randomNumbers.push(randomNumber);
+                        } else {
+                            i --;
+                        }
+                    }
+                } else if (limit == 5) {
+                    for (let i = 0; i < 5; i++) {
+                        randomNumbers.push(i);
+                    }
+                } else {
+                    return 15;
+                }
+            }
+    
+            let choosenNumbers = [];
+    
+            do {
+    
+                bruteQuestions.forEach((question, index) => {
+                    if (randomNumbers.includes(question.index)) {
+                        if (question.language) {
+                            if (question.language == discipline) {
+                                if (!questions.includes(question)) {
+                                    questions.push(question);
+                                    choosenNumbers.push(question.index);
+                                }
+                            }
+                        } else {
+                            if (!questions.includes(question)) {
+                                questions.push(question);
+                                choosenNumbers.push(question.index);
+                            }
+                        }
+                    } 
+                });
+    
+                if (choosenNumbers.length < randomNumbers.length) {
+                    lengthRandom = randomNumbers.length;
+                    randomNumbers.forEach((number, index) => {
+                        if (!choosenNumbers.includes(number)) {
+                            randomNumbers.splice(index, 1);
+                            while (randomNumbers.length < lengthRandom) {
+                                randomNumber = randomInt(offset, limitQuestions + offset);
+                                if (!randomNumbers.includes(randomNumber)) {
+                                    randomNumbers.push(randomNumber);
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                }
+                
+            } while (questions.length < limit);
+    
+            return questions;
+        }
+
+    } catch (error) {
+        console.error('Erro detalhado:', error);
+        res.status(500).json({ 
+            error: 'Erro interno',
+            message: error.message 
+        });
+    }
+
+}
+
+async function verifyQuestions(req, res) {
+    try {
+        let {discipline, year} = req.query;
+
+        if (discipline == "Inglês") {
+            discipline = "ingles";
+        } else if (discipline == "Espanhol") {
+            discipline = "espanhol";
+        }
+    
         let offset = "";
         let limitQuestions = 44;
 
@@ -121,81 +224,42 @@ async function getQuestionsByDiscipline(discipline, year, limit) {
             offset = 91;
         } else if (discipline == "matematica") {
             offset = 136;
-        } else {
+        } else if (discipline == "ingles" || discipline == "espanhol") {
             offset = 1
-            limitQuestions = 10
+            limitQuestions = 5
         }
-    
-        const response = await getQuestionsByOffset(year, offset, limitQuestions);
-        const bruteQuestions = response.questions;
 
-        let randomNumbers = [];
-        let randomNumber = 0;
         let questions = [];
+        let bruteQuestions;
+        let response;
 
-        if (offset != 1 && limit <= 44) {
-            for (let i = 0; i < limit; i++) {
-                randomNumber = randomInt(offset, limitQuestions + offset);
-                if (!randomNumbers.includes(randomNumber)) {
-                    randomNumbers.push(randomNumber);
-                } else {
-                    i --;
-                }
-            }
-        } else {
-            if (limit < 5) {
-                for (let i = 0; i < limit; i++) {
-                    randomNumber = randomInt(offset, 5);
-                    if (!randomNumbers.includes(randomNumber)) {
-                        randomNumbers.push(randomNumber);
-                    } else {
-                        i --;
-                    }
-                }
-            } else if (limit == 5) {
-                for (let i = 0; i < 5; i++) {
-                    randomNumbers.push(i);
-                }
-            } else {
-                return res.status(500).json({ 
-                    error: 'A quantidade de questões é superior a que existem no banco' 
-                });
-            }
-        }
+        if (discipline != "ingles" && discipline != "espanhol") {
+            const response = await getQuestionsByOffset(year, offset, limitQuestions);
 
-        let choosenNumbers = [];
+            bruteQuestions = response.questions;
 
-        do {
+            console.log(discipline);
 
             bruteQuestions.forEach((question, index) => {
-                if (randomNumbers.includes(question.index)) {
-                    if (!questions.includes(question)) {
-                        questions.push(question);
-                        choosenNumbers.push(question.index);
-                    }
+                if (question.discipline == discipline) {
+                    questions.push(question);
                 } 
             });
 
-            if (choosenNumbers.length < randomNumbers.length) {
-                lengthRandom = randomNumbers.length;
-                randomNumbers.forEach((number, index) => {
-                    if (!choosenNumbers.includes(number)) {
-                        randomNumbers.splice(index, 1);
-                        while (randomNumbers.length < lengthRandom) {
-                            randomNumber = randomInt(offset, limitQuestions + offset);
-                            if (!randomNumbers.includes(randomNumber)) {
-                                randomNumbers.push(randomNumber);
-                                break;
-                            }
-                        }
-                    }
-                })
-            }
+        } else {
+            const response = await getQuestionsByLanguage(year, discipline);
+
+            bruteQuestions = response.questions;
+
+            bruteQuestions.forEach((question, index) => {
+                if (question.language == discipline) {
+                    questions.push(question);
+                } 
+            });
+        }
             
-        } while (questions.length < limit);
-
-        return questions;
-
+    
+        return res.json(questions);
 
     } catch (error) {
         console.error('Erro detalhado:', error);
@@ -204,11 +268,11 @@ async function getQuestionsByDiscipline(discipline, year, limit) {
             message: error.message 
         });
     }
-
+    
 }
 
 function randomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-module.exports = { getQuestionsNoModel, getYears, getSubjects, getQuestionsByDiscipline };
+module.exports = { getQuestionsNoModel, getYears, getSubjects, getQuestionsByDiscipline, verifyQuestions };

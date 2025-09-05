@@ -25,4 +25,10 @@ async function getQuestionsByOffset(year, offset, limitQuestions) {
     return response.data;
 }
 
-module.exports = { fetchQuestionByYear, getDataExams, getDisciplinesData,  getQuestionsByOffset};
+async function getQuestionsByLanguage(year, language) {
+    const response = await axios.get(`https://api.enem.dev/v1/exams/${year}/questions?language=${language}&limit=10`);
+
+    return response.data;
+}
+
+module.exports = { fetchQuestionByYear, getDataExams, getDisciplinesData,  getQuestionsByOffset, getQuestionsByLanguage};
