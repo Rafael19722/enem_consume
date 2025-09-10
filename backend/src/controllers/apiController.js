@@ -9,134 +9,351 @@ const path = require("path");
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 async function getQuestionsNoModel(req, res) {
-
     try {
         const { questions } = req.body;
-        
         const doc = new PDFDocument();
-        
+        const margin = 40;
+        const pageWidth = doc.page.width;
+        const pageHeight = doc.page.height;
+        const columnWidth = (pageWidth - (margin * 3)) / 2;
+
         res.setHeader('Content-Disposition', 'attachment; filename="questoes-enem.pdf"');
         res.setHeader('Content-Type', 'application/pdf');
-        
         doc.pipe(res);
 
-        for (const question of questions) {
-            doc.fontSize(16).text(question.title, { underline: true });
-            doc.moveDown(0.5);
+        // Configurações de fonte
+        doc.font('Helvetica');
+        
+        let leftY = margin;
+        let rightY = margin;
+
+        for (let i = 0; i < questions.length; i++) {
+            const question = questions[i];
             
-            const imageUrl = extractImageUrl(question.context);
+            // Decide em qual coluna tentar primeiro
+            const leftSpace = pageHeight - margin - leftY;
+            const rightSpace = pageHeight - margin - rightY;
+            let useLeftColumn = leftSpace >= rightSpace;
             
-            if (imageUrl) {
-                doc.fontSize(12).text(removeLastLine(question.context));
-                doc.moveDown(0.5);
-                await addImageToPDF(doc, imageUrl);
-            } else if (question.context) {
-                doc.fontSize(12).text(question.context);
-                doc.moveDown(0.5);
+            let x = useLeftColumn ? margin : margin + columnWidth + margin;
+            let currentY = useLeftColumn ? leftY : rightY;
+
+            // 🔹 Estimar altura da questão antes
+            const estimatedHeight = await estimateQuestionHeight(doc, question, columnWidth);
+
+            // Se não couber na coluna atual, tenta a outra
+            if (currentY + estimatedHeight > pageHeight - margin) {
+                useLeftColumn = !useLeftColumn;
+                x = useLeftColumn ? margin : margin + columnWidth + margin;
+                currentY = useLeftColumn ? leftY : rightY;
+
+                // Se ainda assim não couber, cria nova página
+                if (currentY + estimatedHeight > pageHeight - margin) {
+                    doc.addPage();
+                    leftY = margin;
+                    rightY = margin;
+                    useLeftColumn = true;
+                    x = margin;
+                    currentY = leftY;
+                }
             }
 
-            /*if (question.files) {
-                const imageUrl = extractImageUrl(question.files);
-                await addImageToPDF(doc, imageUrl);
-            }*/
-            
-            if (question.alternativesIntroduction) {
-                doc.fontSize(12).text(question.alternativesIntroduction);
-                doc.moveDown(0.5);
+            // 🔹 Agora processa a questão
+            const result = await processQuestion(doc, question, x, currentY, columnWidth, pageHeight, margin);
+
+            // Atualizar Y da coluna usada
+            if (useLeftColumn) {
+                leftY = result.finalY + 20;
+            } else {
+                rightY = result.finalY + 20;
             }
-            
-            // Use for...of para alternativas também
-            for (const alt of question.alternatives) {
-                const altImageUrl = extractImageUrl(alt.file);
-                const verifyAlternative = true;
-                if (altImageUrl) {
-                    doc.text(`${alt.letter}) `);
-                    await addImageToPDF(doc, altImageUrl, verifyAlternative);
-                } else {
-                    doc.text(`${alt.letter}) ${alt.text}`);
-                }
-                doc.moveDown(0.3);
-            }
-            
-            doc.moveDown(1);
-            doc.addPage(); // Adiciona nova página para próxima questão
         }
-        
+
         doc.end();
 
-        doc.on('end', () => {
-            console.log('PDF gerado com sucesso para o cliente.');
-        });
     } catch (error) {
         console.error('Erro detalhado:', error);
-        res.status(500).json({ 
-            error: 'Erro interno',
-            message: error.message 
-        });
+        if (!res.headersSent) {
+            res.status(500).json({ 
+                error: 'Erro interno',
+                message: error.message 
+            });
+        }
     }
 }
 
-function extractImageUrl(text) {
-    if (!text || typeof text !== 'string') return null;
+function processTextWithBreak(doc, text, x, startY, columnWidth, maxY) {
+    let currentY = startY;
+    let remainingText = null;
     
-    // Para Markdown: ![](url)
-    const markdownMatch = text.match(/!\[.*?\]\((.*?)\)/);
-    if (markdownMatch && markdownMatch[1]) {
-        return markdownMatch[1];
+    // Calcular quantas linhas cabem
+    const lineHeight = doc.currentLineHeight();
+    const availableLines = Math.floor((maxY - currentY) / lineHeight);
+    
+    if (availableLines <= 0) {
+        return { finalY: currentY, remainingText: text };
     }
     
-    // Verificar se é URL de imagem direta
-    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
-    const isDirectImageUrl = imageExtensions.some(ext => 
-        text.toLowerCase().includes(ext.toLowerCase())
-    );
+    // Quebrar texto em linhas
+    const lines = doc.splitTextToSize(text, columnWidth, {});
+    const linesThatFit = lines.slice(0, availableLines);
+    const remainingLines = lines.slice(availableLines);
     
-    if (isDirectImageUrl) {
-        return text;
+    // Adicionar linhas que cabem
+    doc.text(linesThatFit.join('\n'), x, currentY, {
+        width: columnWidth,
+        align: 'justify'
+    });
+    
+    currentY += linesThatFit.length * lineHeight;
+    
+    // Se sobrou texto, preparar para continuar
+    if (remainingLines.length > 0) {
+        remainingText = remainingLines.join('\n');
+    }
+    
+    return { finalY: currentY, remainingText };
+}
+
+async function estimateQuestionHeight(doc, question, columnWidth) {
+    let height = 0;
+    
+    // Título
+    height += 20;
+    
+    // Contexto
+    if (question.context) {
+        const cleanContext = cleanText(question.context);
+        if (cleanContext) {
+            const contextHeight = doc.heightOfString(cleanContext, {
+                width: columnWidth,
+                align: 'justify'
+            });
+            height += contextHeight + 10;
+        }
+        
+        if (extractImageUrl(question.context)) {
+            height += 100; // Altura estimada para imagem
+        }
+    }
+
+    // Introdução das alternativas
+    if (question.alternativesIntroduction) {
+        const introHeight = doc.heightOfString(question.alternativesIntroduction, {
+            width: columnWidth
+        });
+        height += introHeight + 10;
+    }
+    
+    // Alternativas
+    for (const alt of question.alternatives) {
+        if (extractImageUrl(alt.text || alt.file)) {
+            height += 80; // Altura estimada para imagem
+        } else {
+            const altText = `${alt.letter}) ${cleanText(alt.text)}`;
+            const altHeight = doc.heightOfString(altText, { 
+                width: columnWidth,
+                align: 'justify' 
+            });
+            height += altHeight + 5;
+        }
+    }
+    
+    height += 15; // Espaço extra
+    return height;
+}
+
+async function processQuestion(doc, question, x, startY, columnWidth, pageHeight, margin) {
+    let currentY = startY;
+    const maxY = pageHeight - margin;
+    let hasOverflow = false;
+    let fullyProcessed = true;
+    
+    if (currentY > maxY - 50) { 
+        return { finalY: currentY, overflow: true, processed: false };
+    }
+    
+    // Título
+    doc.fontSize(12).font('Helvetica-Bold')
+       .text(question.title, x, currentY, {
+           width: columnWidth,
+           align: 'left'
+       });
+    currentY += 20;
+
+    // Contexto
+    if (question.context) {
+        const imageUrl = extractImageUrl(question.context);
+        const cleanContext = cleanText(question.context);
+        
+        doc.fontSize(10).font('Helvetica');
+        
+        if (cleanContext) {
+            const textHeight = doc.heightOfString(cleanContext, {
+                width: columnWidth,
+                align: 'justify'
+            });
+            
+            if (currentY + textHeight > maxY) {
+                hasOverflow = true;
+                fullyProcessed = false;
+            } else {
+                doc.text(cleanContext, x, currentY, {
+                    width: columnWidth,
+                    align: 'justify'
+                });
+                currentY += textHeight + 10;
+            }
+        }
+        
+        if (imageUrl && currentY < maxY - 100) { 
+            currentY += 5;
+            const imageHeight = await addImageToPDF(doc, imageUrl, x, currentY, columnWidth);
+            currentY += imageHeight + 10;
+        } else if (imageUrl) {
+            hasOverflow = true;
+        }
+    }
+
+    // Introdução das alternativas
+    if (question.alternativesIntroduction && currentY < maxY - 30) {
+        const introHeight = doc.heightOfString(question.alternativesIntroduction, {
+            width: columnWidth
+        });
+        
+        if (currentY + introHeight > maxY) {
+            hasOverflow = true;
+        } else {
+            doc.text(question.alternativesIntroduction, x, currentY, {
+                width: columnWidth,
+                align: 'justify'
+            });
+            currentY += introHeight + 10;
+        }
+    }
+
+    // Alternativas
+    doc.fontSize(10);
+    for (const alt of question.alternatives) {
+        if (currentY > maxY - 30) { 
+            hasOverflow = true;
+            fullyProcessed = false;
+            break;
+        }
+        
+        const altImageUrl = extractImageUrl(alt.text || alt.file);
+        const cleanAltText = cleanText(alt.text);
+        
+        if (altImageUrl) {
+            doc.text(`${alt.letter}) `, x, currentY);
+            const textWidth = doc.widthOfString(`${alt.letter}) `);
+            
+            if (currentY > maxY - 100) {
+                hasOverflow = true;
+                fullyProcessed = false;
+                break;
+            }
+            
+            const imageHeight = await addImageToPDF(doc, altImageUrl, x + textWidth, currentY - 2, columnWidth - textWidth - 5);
+            currentY += Math.max(20, imageHeight) + 8;
+            
+        } else if (cleanAltText) {
+            const altText = `${alt.letter}) ${cleanAltText}`;
+            const altHeight = doc.heightOfString(altText, { 
+                width: columnWidth,
+                align: 'justify' 
+            });
+            
+            if (currentY + altHeight > maxY) {
+                hasOverflow = true;
+                fullyProcessed = false;
+                break;
+            }
+            
+            doc.text(altText, x, currentY, {
+                width: columnWidth,
+                align: 'justify'
+            });
+            currentY += altHeight + 5;
+        }
+    }
+
+    return { 
+        finalY: currentY, 
+        overflow: hasOverflow, 
+        processed: fullyProcessed 
+    };
+}
+
+function cleanText(text) {
+    if (!text) return '';
+    
+    // Remover marcações HTML e Markdown
+    let cleaned = text.replace(/!\[.*?\]\(.*?\)/g, '')
+                     .replace(/<img[^>]*>/g, '')
+                     .replace(/<[^>]*>/g, '')
+                     .replace(/\*\*(.*?)\*\*/g, '$1') // negrito
+                     .replace(/\*(.*?)\*/g, '$1');    // itálico
+    
+    // Remover múltiplos espaços e normalizar
+    cleaned = cleaned.replace(/\s+/g, ' ')
+                    .replace(/\\n/g, '\n')
+                    .trim();
+    
+    return cleaned;
+}
+
+function extractImageUrl(text) {
+    if (!text) return null;
+    
+    const patterns = [
+        /!\[.*?\]\((.*?)\)/,
+        /<img[^>]+src="([^">]+)"/,
+        /(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|bmp|webp|svg))/i
+    ];
+    
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
     }
     
     return null;
 }
 
-async function addImageToPDF(doc, imageUrl, verifyAlternative = false) {
+async function addImageToPDF(doc, imageUrl, x, y, maxWidth) {
     try {
         const response = await axios({
             url: imageUrl,
             method: 'GET',
             responseType: 'arraybuffer',
-            httpsAgent: httpsAgent,
             timeout: 10000
         });
 
         const imageBuffer = Buffer.from(response.data);
-
         const dimensions = sizeOf(imageBuffer);
         
-        // Adicionar imagem com tamanho apropriado
-        if (verifyAlternative) {
-            doc.image(imageBuffer, {
-                width: dimensions.width,
-                height: 50
-            });
-        } else {
-            doc.image(imageBuffer, {
-                width: dimensions.width,
-                height: dimensions.height
-            });
-        }
+        // Limitar tamanho máximo para alternativas
+        const maxHeight = 60; // Reduzido para alternativas
+        const ratio = Math.min(
+            maxWidth / dimensions.width,
+            maxHeight / dimensions.height,
+            1
+        );
         
-        doc.moveDown(0.5);
+        const width = dimensions.width * ratio;
+        const height = dimensions.height * ratio;
+        
+        // Centralizar verticalmente com o texto
+        doc.image(imageBuffer, x, y + 2, { width, height });
+        return height;
         
     } catch (error) {
-        console.error('Erro ao carregar imagem:', imageUrl, error);
-        doc.text(`[Imagem não carregada: ${imageUrl}]`);
+        console.error('Erro ao carregar imagem:', error);
+        doc.fontSize(8).text('[Imagem]', x, y);
+        return 12;
     }
-}
-
-function removeLastLine(text) {
-    const lines = text.split('\n');
-    lines.pop(); 
-    return lines.join('\n');
 }
 
 async function getYears(req, res) {
